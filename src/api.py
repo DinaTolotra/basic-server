@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlmodel import Session, SQLModel, select
 
@@ -38,6 +39,14 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Caching Demo API", lifespan=lifespan)
 SessionDependency = Annotated[Session, Depends(get_session)]
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    started_at = perf_counter()
+    response = await call_next(request)
+    response.headers["X-Process-Time"] = f"{perf_counter() - started_at:.6f}"
+    return response
 
 
 def require_parent(session: Session, model: type[SQLModel], identifier: int, name: str) -> None:

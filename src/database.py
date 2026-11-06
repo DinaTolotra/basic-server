@@ -1,14 +1,15 @@
 import os
 from collections.abc import Iterator
 
+from dotenv import load_dotenv
 from sqlmodel import Session, SQLModel, create_engine
 
-from . import model
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg://taskflow:taskflow@localhost:5432/TaskFlow",
-)
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set. Add it to .env or the process environment.")
+
 engine = create_engine(DATABASE_URL)
 
 
