@@ -9,6 +9,7 @@ from sqlmodel import Session, SQLModel, select
 
 from .database import create_db_and_tables, get_session
 from .model import Item, Project, User
+from .cache import ItemCache
 
 
 class UserCreate(BaseModel):
@@ -32,7 +33,8 @@ class ItemCreate(BaseModel):
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
+    app.state.cache = ItemCache()
     create_db_and_tables()
     yield
 
@@ -161,9 +163,13 @@ def delete_project(project_id: int, session: SessionDependency):
 def create_item(payload: ItemCreate, session: SessionDependency):
     require_parent(session, Project, payload.project_id, "project")
     item = Item(**payload.model_dump())
+    if hasattr(app.state, "cache") and item.id is not None:
+        del app.state.cache[item.id]
     session.add(item)
     session.commit()
     session.refresh(item)
+    if hasattr(app.state, "cache"):
+        app.state.cache[item.id] = item
     return item
 
 
@@ -173,30 +179,47 @@ def list_items(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ):
-    return session.exec(select(Item).offset(offset).limit(limit)).all()
+    sttm = select(Item).offset(offset).limit(limit)
+    items = session.exec(sttm).all()
+    if hasattr(app.state, "cache"):
+        for item in items:
+            app.state.cache[item.id] = item
+    return items
 
 
 @app.get("/items/{item_id}", response_model=Item)
 def read_item(item_id: int, session: SessionDependency):
-    return get_record(session, Item, item_id, "item")
+    if hasattr(app.state, "cache") and app.state.cache[item_id]:
+        item = app.state.cache[item_id]
+    else:
+        item = get_record(session, Item, item_id, "item")
+        if hasattr(app.state, "cache") and hasattr(item, "id"):
+            app.state.cache[item.id] = item
+    return item
 
 
 @app.put("/items/{item_id}", response_model=Item)
 def update_item(item_id: int, payload: ItemCreate, session: SessionDependency):
     require_parent(session, Project, payload.project_id, "project")
     item = get_record(session, Item, item_id, "item")
+    if hasattr(app.state, "cache") and hasattr(item, "id"):
+        del app.state.cache[item.id]
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
     item.updated_at = datetime.now(timezone.utc)
     session.add(item)
     session.commit()
     session.refresh(item)
+    if hasattr(app.state, "cache") and hasattr(item, "id"):
+        app.state.cache[item.id] = item
     return item
 
 
 @app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_item(item_id: int, session: SessionDependency):
     item = get_record(session, Item, item_id, "item")
+    if hasattr(app.state, "cache") and hasattr(item, "id"):
+        del app.state.cache[item.id]
     session.delete(item)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
